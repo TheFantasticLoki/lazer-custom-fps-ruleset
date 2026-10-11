@@ -1,0 +1,82 @@
+{
+    "version": "2.0.0",
+    "//": "Builds use the user-local .NET 10 SDK (~/.dotnet) because official osu!Game targets net10 while the system dotnet is SDK 8. Update 'command' if you install .NET 10 elsewhere (e.g. add it to PATH and use 'dotnet').",
+    "tasks": [
+        {
+            "label": "build (Debug)",
+            "type": "process",
+            "command": "${env:HOME}/.dotnet/dotnet",
+            "args": [
+                "build",
+                "${workspaceFolder}/osu.Game.Rulesets.CustomFps/osu.Game.Rulesets.CustomFps.csproj",
+                "-c",
+                "Debug",
+                "-p:GenerateFullPaths=true",
+                "--nologo"
+            ],
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            },
+            "problemMatcher": "$mscompile",
+            "presentation": {
+                "reveal": "always",
+                "panel": "shared"
+            }
+        },
+        {
+            "label": "build (Release)",
+            "type": "process",
+            "command": "${env:HOME}/.dotnet/dotnet",
+            "args": [
+                "build",
+                "${workspaceFolder}/osu.Game.Rulesets.CustomFps/osu.Game.Rulesets.CustomFps.csproj",
+                "-c",
+                "Release",
+                "-p:GenerateFullPaths=true",
+                "--nologo"
+            ],
+            "group": "build",
+            "problemMatcher": "$mscompile",
+            "presentation": {
+                "reveal": "always",
+                "panel": "shared"
+            }
+        },
+        {
+            "label": "rebuild (Release)",
+            "type": "process",
+            "command": "${env:HOME}/.dotnet/dotnet",
+            "args": [
+                "build",
+                "${workspaceFolder}/osu.Game.Rulesets.CustomFps/osu.Game.Rulesets.CustomFps.csproj",
+                "-c",
+                "Release",
+                "--no-incremental",
+                "-p:GenerateFullPaths=true",
+                "--nologo"
+            ],
+            "group": "build",
+            "problemMatcher": "$mscompile",
+            "presentation": {
+                "reveal": "always",
+                "panel": "shared"
+            }
+        },
+        {
+            "label": "clean",
+            "type": "process",
+            "command": "${env:HOME}/.dotnet/dotnet",
+            "args": [
+                "clean",
+                "${workspaceFolder}/osu.Game.Rulesets.CustomFps/osu.Game.Rulesets.CustomFps.csproj",
+                "--nologo"
+            ],
+            "problemMatcher": "$mscompile",
+            "presentation": {
+                "reveal": "always",
+                "panel": "shared"
+            }
+        }
+    ]
+}
