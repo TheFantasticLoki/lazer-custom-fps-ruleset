@@ -1,6 +1,7 @@
 // Copyright (c) ppy Pty Ltd <contact@ppy.sh>. Licensed under the MIT Licence.
 // See the LICENCE file in the repository root for full licence text.
 
+using System.ComponentModel;
 using osu.Framework.Configuration;
 using osu.Game.Configuration;
 using osu.Game.Database;
@@ -16,8 +17,9 @@ namespace osu.Game.Rulesets.CustomFps.Configuration
     /// file, so official builds and other rulesets can never collide with or corrupt these settings. Removing the
     /// ruleset simply removes its settings along with it.
     ///
-    /// The limiter engages whenever the game's frame sync mode is "Basically unlimited"; the chosen limits persist
-    /// here and are re-applied on the next launch.
+    /// While enabled, it overrides the update, input and audio thread limits regardless of the game's frame sync mode
+    /// (the draw thread is always left to the game's own frame limiter). The chosen limits persist here and are
+    /// re-applied the next time the settings panel opens.
     /// </remarks>
     public class CustomFpsRulesetConfigManager : RulesetConfigManager<CustomFpsRulesetSetting>
     {
@@ -28,41 +30,64 @@ namespace osu.Game.Rulesets.CustomFps.Configuration
 
         protected override void InitialiseDefaults()
         {
+            SetDefault(CustomFpsRulesetSetting.Enabled, false);
+            SetDefault(CustomFpsRulesetSetting.PresetMode, CustomFpsPreset.Custom);
+
             SetDefault(CustomFpsRulesetSetting.InputThreadLimit, 1000.0, 0.0, 8000.0, 1.0);
             SetDefault(CustomFpsRulesetSetting.AudioThreadLimit, 1000.0, 0.0, 8000.0, 1.0);
             SetDefault(CustomFpsRulesetSetting.UpdateThreadLimit, 1000.0, 0.0, 8000.0, 1.0);
-            SetDefault(CustomFpsRulesetSetting.DrawThreadLimit, 1000.0, 0.0, 8000.0, 1.0);
-
-            SetDefault(CustomFpsRulesetSetting.SyncThreadLimits, false);
         }
     }
 
     public enum CustomFpsRulesetSetting
     {
         /// <summary>
-        /// Frame rate limit for the update thread, in FPS. 0 is treated as unlimited.
+        /// Whether the update-side limiter is active. While active it overrides the update, input and audio thread
+        /// limits; the draw thread is always left to the game's own frame limiter.
+        /// </summary>
+        Enabled,
+
+        /// <summary>
+        /// Which preset drives the update-side limits. <see cref="CustomFpsPreset.Custom"/> uses the per-thread
+        /// sliders; any other value uses that tier's fixed rate for all three threads.
+        /// </summary>
+        PresetMode,
+
+        /// <summary>
+        /// Frame rate limit for the update thread, in FPS. 0 is treated as unlimited. Only used in Custom mode.
         /// </summary>
         UpdateThreadLimit,
 
         /// <summary>
-        /// Frame rate limit for the audio thread, in FPS. 0 is treated as unlimited.
+        /// Frame rate limit for the audio thread, in FPS. 0 is treated as unlimited. Only used in Custom mode.
         /// </summary>
         AudioThreadLimit,
 
         /// <summary>
-        /// Frame rate limit for the input thread, in FPS. 0 is treated as unlimited.
+        /// Frame rate limit for the input thread, in FPS. 0 is treated as unlimited. Only used in Custom mode.
         /// </summary>
         InputThreadLimit,
+    }
 
-        /// <summary>
-        /// Frame rate limit for the draw thread, in FPS. 0 is treated as unlimited.
-        /// </summary>
-        DrawThreadLimit,
+    /// <summary>
+    /// Preset tiers for the update-side limiter. The draw thread is never part of a preset — it is always governed by
+    /// the game's own frame limiter, which keeps its refresh-rate multipliers.
+    /// </summary>
+    public enum CustomFpsPreset
+    {
+        [Description("Custom")]
+        Custom,
 
-        /// <summary>
-        /// Whether the input and audio threads should follow the update thread limit. The draw thread is never
-        /// synced, as stutter there is the most visible to the player.
-        /// </summary>
-        SyncThreadLimits,
+        [Description("1k (1000 FPS)")]
+        Tier1k,
+
+        [Description("2× (2000 FPS)")]
+        Tier2x,
+
+        [Description("4× (4000 FPS)")]
+        Tier4x,
+
+        [Description("8× (8000 FPS)")]
+        Tier8x,
     }
 }

@@ -1,9 +1,6 @@
 // Copyright (c) ppy Pty Ltd <contact@ppy.sh>. Licensed under the MIT Licence.
 // See the LICENCE file in the repository root for full licence text.
 
-using System.Collections.Generic;
-using System.ComponentModel;
-using System.Linq;
 using osu.Framework.Allocation;
 using osu.Framework.Bindables;
 using osu.Framework.Configuration;
@@ -18,21 +15,23 @@ using osuTK;
 namespace osu.Game.Rulesets.CustomFps
 {
     /// <summary>
-    /// The settings for this ruleset's per-thread frame limiter.
+    /// The settings for this ruleset's update-side frame limiter.
     /// </summary>
     /// <remarks>
-    /// The host limiter is wired up the first time this settings panel is opened (osu only builds ruleset settings
-    /// sections on first open, not at game load). osu gives rulesets no startup hook — the only ruleset code that
-    /// runs at launch is <c>CreateInstance</c>/<c>CreateConfig</c>, which is handed no host — so limits cannot be
-    /// applied at cold boot from a ruleset alone; they persist here and re-apply the next time this panel opens (or
-    /// at startup on custom builds that apply ruleset configs themselves). An uninstalled ruleset never gets
-    /// constructed, so nothing here can linger or conflict once the ruleset is removed.
+    /// This ruleset deliberately leaves the draw/render thread to the game's own Frame Sync limiter (which keeps its
+    /// refresh-rate multipliers in Graphics settings) and only overrides the update, input and audio threads. The
+    /// wiring runs the first time this panel is opened (osu builds ruleset settings sections on first open, not at
+    /// game load), so limits apply from then on and persist via the ruleset config.
+    ///
+    /// While enabled, the limiter re-asserts itself whenever Frame Sync changes: the framework recomputes the update
+    /// thread limit from the frame sync mode, and this section's handler is registered after it, so it runs last and
+    /// wins. Disabling restores each thread to the value the framework last chose.
     ///
     /// Only long-standing public <see cref="GameHost"/> API is used here (never fork-only members), so this ruleset
-    /// loads and functions identically whether it is dropped into an official osu! install or a custom build.
+    /// loads and functions identically on an official osu! install or a custom build.
     ///
-    /// Config bindables retrieved via <c>GetBindable</c> are weakly bound copies; the fields below keep them (and
-    /// the event handlers attached to them) alive for the lifetime of this section.
+    /// Config bindables retrieved via <c>GetBindable</c> are weakly bound copies; the fields below keep them (and the
+    /// event handlers attached to them) alive for the lifetime of this section.
     /// </remarks>
     public partial class CustomFpsSettingsSubsection : RulesetSettingsSubsection
     {
@@ -41,23 +40,26 @@ namespace osu.Game.Rulesets.CustomFps
         {
         }
 
-        private FillFlowContainer syncedThreadsContainer = null!;
+        private FillFlowContainer customSlidersContainer = null!;
 
-        private readonly List<Bindable<double>> limitBindables = new();
+        private Bindable<bool> enabledBindable = null!;
 
-        private Bindable<bool> syncBindable = null!;
+        private Bindable<CustomFpsPreset> presetBindable = null!;
+
+        private Bindable<double> updateLimit = null!;
+
+        private Bindable<double> audioLimit = null!;
+
+        private Bindable<double> inputLimit = null!;
 
         private Bindable<FrameSync> frameSyncBindable = null!;
 
-        private SettingsNote unlimitedWarningNote = null!;
+        // Framework-chosen values, snapshotted so we can hand control back cleanly when the limiter is turned off.
+        private double frameworkUpdateHz;
 
-        /// <summary>
-        /// UI-only convenience mirroring the current non-draw limits; the realm-stored limit values remain the single
-        /// source of truth, so this is derived from them and never persisted.
-        /// </summary>
-        private readonly Bindable<CustomFpsPreset> preset = new Bindable<CustomFpsPreset>(CustomFpsPreset.Custom);
+        private double frameworkAudioHz;
 
-        private bool updatingPresetFromSliders;
+        private double frameworkInputHz;
 
         [Resolved]
         private GameHost host { get; set; } = null!;
@@ -67,18 +69,11 @@ namespace osu.Game.Rulesets.CustomFps
         {
             var config = (CustomFpsRulesetConfigManager)Config;
 
-            syncBindable = config.GetBindable<bool>(CustomFpsRulesetSetting.SyncThreadLimits);
-
-            limitBindables.Add(config.GetBindable<double>(CustomFpsRulesetSetting.InputThreadLimit));
-            limitBindables.Add(config.GetBindable<double>(CustomFpsRulesetSetting.AudioThreadLimit));
-            limitBindables.Add(config.GetBindable<double>(CustomFpsRulesetSetting.UpdateThreadLimit));
-            limitBindables.Add(config.GetBindable<double>(CustomFpsRulesetSetting.DrawThreadLimit));
-
-            var sync = syncBindable;
-            var input = limitBindables[0];
-            var audio = limitBindables[1];
-            var update = limitBindables[2];
-            var draw = limitBindables[3];
+            enabledBindable = config.GetBindable<bool>(CustomFpsRulesetSetting.Enabled);
+            presetBindable = config.GetBindable<CustomFpsPreset>(CustomFpsRulesetSetting.PresetMode);
+            inputLimit = config.GetBindable<double>(CustomFpsRulesetSetting.InputThreadLimit);
+            audioLimit = config.GetBindable<double>(CustomFpsRulesetSetting.AudioThreadLimit);
+            updateLimit = config.GetBindable<double>(CustomFpsRulesetSetting.UpdateThreadLimit);
 
             Children = new Drawable[]
             {
@@ -87,19 +82,53 @@ namespace osu.Game.Rulesets.CustomFps
                     RelativeSizeAxes = Axes.X,
                     Current =
                     {
-                        Value = new SettingsNote.Data("Takes over while Frame Sync (Graphics settings) is set to Basically unlimited. Any other mode hands control back to the game and locks the sliders.", SettingsNote.Type.Informational),
+                        Value = new SettingsNote.Data("Overrides the update, input and audio thread limits while enabled. The draw/render thread always stays under the game's own Frame Sync limiter (Graphics settings), which keeps its refresh-rate multipliers.", SettingsNote.Type.Informational),
                     },
                 },
-                unlimitedWarningNote = new SettingsNote
+                new SettingsItemV2(new FormCheckBox
+                {
+                    Caption = "Enable update-side limiter",
+                    HintText = "While on, the preset or custom limits below override the update, input and audio threads regardless of Frame Sync mode. Turn off to hand control back to the game.",
+                    Current = enabledBindable,
+                })
+                {
+                    Keywords = new[] { "enable", "on", "off", "toggle", "limiter" },
+                },
+                new SettingsEnumDropdown<CustomFpsPreset>
+                {
+                    LabelText = "Preset",
+                    Keywords = new[] { "preset", "tier", "fps", "limit", "quick", "1k", "2x", "4x", "8x", "custom" },
+                    Current = presetBindable,
+                },
+                customSlidersContainer = new FillFlowContainer
                 {
                     RelativeSizeAxes = Axes.X,
+                    AutoSizeAxes = Axes.Y,
+                    Direction = FillDirection.Vertical,
+                    Spacing = new Vector2(0, 5),
+                    Masking = true,
+                    Children = new Drawable[]
+                    {
+                        new SettingsItemV2(createLimiterSlider("Update thread", updateLimit))
+                        {
+                            Keywords = new[] { "update", "thread", "fps", "limit", "custom" },
+                        },
+                        new SettingsItemV2(createLimiterSlider("Audio thread", audioLimit))
+                        {
+                            Keywords = new[] { "audio", "thread", "fps", "limit", "custom" },
+                        },
+                        new SettingsItemV2(createLimiterSlider("Input thread", inputLimit))
+                        {
+                            Keywords = new[] { "input", "thread", "fps", "limit", "custom" },
+                        },
+                    },
                 },
                 new SettingsNote
                 {
                     RelativeSizeAxes = Axes.X,
                     Current =
                     {
-                        Value = new SettingsNote.Data("0 means truly unlimited — benchmarking only. Don't play this way: use 0 to find your 1% lows, then set the sliders to those numbers for daily play.", SettingsNote.Type.Warning),
+                        Value = new SettingsNote.Data("0 means truly unlimited — benchmarking only. Don't play this way: use 0 to find your 1% lows, then set the limits to those numbers for daily play.", SettingsNote.Type.Warning),
                     },
                 },
                 new SettingsNote
@@ -110,217 +139,146 @@ namespace osu.Game.Rulesets.CustomFps
                         Value = new SettingsNote.Data("Reporting an issue? First reproduce it with this ruleset removed — only reports that also occur on official lazer without it will be looked at upstream.", SettingsNote.Type.Warning),
                     },
                 },
-                new SettingsItemV2(new FormCheckBox
-                {
-                    Caption = "Sync input and audio to update",
-                    HintText = "Applies the update thread limit to the input and audio threads. The draw thread always keeps its own limit.",
-                    Current = sync,
-                })
-                {
-                    Keywords = new[] { "sync", "threads", "limit", "all" },
-                },
-                new SettingsEnumDropdown<CustomFpsPreset>
-                {
-                    LabelText = "Preset",
-                    Keywords = new[] { "preset", "tier", "fps", "limit", "quick", "1k", "2x", "4x", "8x" },
-                    Current = preset,
-                },
-                new SettingsItemV2(createLimiterSlider("Update thread", update))
-                {
-                    Keywords = new[] { "update", "thread", "fps", "limit", "custom" },
-                },
-                syncedThreadsContainer = new FillFlowContainer
-                {
-                    RelativeSizeAxes = Axes.X,
-                    AutoSizeAxes = Axes.Y,
-                    Direction = FillDirection.Vertical,
-                    Spacing = new Vector2(0, 5),
-                    Masking = true,
-                    Children = new Drawable[]
-                    {
-                        new SettingsItemV2(createLimiterSlider("Input thread", input))
-                        {
-                            Keywords = new[] { "input", "thread", "fps", "limit", "custom" },
-                        },
-                        new SettingsItemV2(createLimiterSlider("Audio thread", audio))
-                        {
-                            Keywords = new[] { "audio", "thread", "fps", "limit", "custom" },
-                        },
-                    },
-                },
-                new SettingsItemV2(createLimiterSlider("Draw thread", draw))
-                {
-                    Keywords = new[] { "draw", "thread", "fps", "limit", "custom" },
-                },
             };
 
-            // Observe the game's own frame sync mode: the one fork-agnostic signal that tells us when the framework
-            // is (or is not) applying its own limiter, so we can take over exactly while "Basically unlimited".
             frameSyncBindable = host.Dependencies.Get<FrameworkConfigManager>().GetBindable<FrameSync>(FrameworkSetting.FrameSync);
 
-            var frameSync = frameSyncBindable;
+            // Seed the restore targets with the framework's current choices so a disabled limiter never writes zeros.
+            frameworkUpdateHz = host.MaximumUpdateHz;
+            frameworkAudioHz = host.AudioThread.ActiveHz;
+            frameworkInputHz = host.InputThread.ActiveHz;
 
-            frameSync.BindValueChanged(_ =>
-            {
-                updateSliderAvailability();
+            enabledBindable.BindValueChanged(_ => onEngagementChanged());
+            presetBindable.BindValueChanged(_ => onPresetChanged());
+            updateLimit.BindValueChanged(_ => applyLimitsIfEnabled());
+            audioLimit.BindValueChanged(_ => applyLimitsIfEnabled());
+            inputLimit.BindValueChanged(_ => applyLimitsIfEnabled());
+            // Registered after the framework's own frame-sync handler, so this runs last and can re-assert our values
+            // on top of the limits the framework just recomputed.
+            frameSyncBindable.BindValueChanged(_ => onFrameSyncChanged());
 
-                // When frame sync changes to any other mode, the framework has already applied the correct limits
-                // for it (its own handler runs before ours), so re-asserting is only needed on engagement.
-                if (frameSync.Value == FrameSync.Unlimited)
-                    applyLimits();
-            }, true);
-
-            // Re-apply whenever an input changes while engaged (the sliders, or a sync toggle), and flag any
-            // slider parked at truly-unlimited while engaged.
-            input.BindValueChanged(_ => onLimitsChanged());
-            audio.BindValueChanged(_ => onLimitsChanged());
-            update.BindValueChanged(_ => onLimitsChanged());
-            draw.BindValueChanged(_ => onLimitsChanged());
-            sync.BindValueChanged(_ => updateSyncedThreadsVisibility(), true);
-
-            // Selecting a preset drives the non-draw sliders together (draw keeps its own). Moving any slider by hand
-            // flips the preset back to Custom via updatePresetFromSliders, so the two never fight — the realm-stored
-            // limit values stay the single source of truth.
-            preset.BindValueChanged(p =>
-            {
-                if (updatingPresetFromSliders)
-                    return;
-
-                if (presetToFrameLimit(p.NewValue) is not { } limit)
-                    return;
-
-                update.Value = limit;
-                input.Value = limit;
-                audio.Value = limit;
-            });
-
-            // Seed the dropdown from the persisted limits on open.
-            updatePresetFromSliders();
-
-            void onLimitsChanged()
-            {
-                applyLimitsIfEngaged();
-                updateUnlimitedWarning();
-                updatePresetFromSliders();
-            }
-
-            void updatePresetFromSliders()
-            {
-                // When synced, the update limit alone drives input and audio, so it alone decides the tier.
-                var detected = sync.Value
-                    ? frameLimitToPreset(update.Value)
-                    : update.Value == input.Value && input.Value == audio.Value
-                        ? frameLimitToPreset(update.Value)
-                        : CustomFpsPreset.Custom;
-
-                if (detected == preset.Value)
-                    return;
-
-                updatingPresetFromSliders = true;
-                preset.Value = detected;
-                updatingPresetFromSliders = false;
-            }
-
-            void updateUnlimitedWarning()
-            {
-                bool anyUnlimited = new[] { input, audio, update, draw }.Any(b => b.Value == 0);
-
-                unlimitedWarningNote.Current.Value = anyUnlimited
-                    ? new SettingsNote.Data("At least one thread is truly unlimited (0) — expect stutter and high power use. Use this only to measure 1% lows, then lock in real limits.", SettingsNote.Type.Critical)
-                    : null;
-            }
-
-            void applyLimitsIfEngaged()
-            {
-                if (frameSync.Value == FrameSync.Unlimited)
-                    applyLimits();
-            }
-
-            void applyLimits()
-            {
-                // Sync ties the input and audio threads to the update thread; the draw (render) thread is never
-                // synced, as stutter there is the most visible to the player.
-                host.AudioThread.ActiveHz = limitOrUnlimited(sync.Value ? update.Value : audio.Value);
-                host.MaximumDrawHz = limitOrUnlimited(draw.Value);
-                host.MaximumUpdateHz = limitOrUnlimited(update.Value);
-
-                // Must be done last — the host schedules a task that resets the input thread limiter when
-                // MaximumUpdateHz is mutated.
-                host.InputThread.ActiveHz = limitOrUnlimited(sync.Value ? update.Value : input.Value);
-            }
-
-            void updateSliderAvailability()
-            {
-                bool engaged = frameSync.Value == FrameSync.Unlimited;
-
-                foreach (var bindable in new[] { input, audio, update, draw })
-                    bindable.Disabled = !engaged;
-            }
-
-            void updateSyncedThreadsVisibility()
-            {
-                if (sync.Value)
-                {
-                    syncedThreadsContainer.AutoSizeAxes &= ~Axes.Y;
-                    syncedThreadsContainer.Height = 0;
-                }
-                else
-                    syncedThreadsContainer.AutoSizeAxes |= Axes.Y;
-            }
-
-            updateUnlimitedWarning();
-
-            static double limitOrUnlimited(double value) => value <= 0 ? double.MaxValue : value;
-
-            static double? presetToFrameLimit(CustomFpsPreset preset) => preset switch
-            {
-                CustomFpsPreset.Tier1k => 1000d,
-                CustomFpsPreset.Tier2x => 2000d,
-                CustomFpsPreset.Tier4x => 4000d,
-                CustomFpsPreset.Tier8x => 8000d,
-                _ => null,
-            };
-
-            static CustomFpsPreset frameLimitToPreset(double value) => value switch
-            {
-                1000 => CustomFpsPreset.Tier1k,
-                2000 => CustomFpsPreset.Tier2x,
-                4000 => CustomFpsPreset.Tier4x,
-                8000 => CustomFpsPreset.Tier8x,
-                _ => CustomFpsPreset.Custom,
-            };
-
-            static FormSliderBar<double> createLimiterSlider(string caption, Bindable<double> bindable) => new FormSliderBar<double>
-            {
-                Caption = caption,
-                KeyboardStep = 50,
-                TooltipFormat = v => v == 0 ? "Unlimited" : $"{v:0} FPS",
-                TransferValueOnCommit = true,
-                Current = { BindTarget = bindable },
-            };
+            onEngagementChanged();
         }
-    }
 
-    /// <summary>
-    /// Convenience groupings for the non-draw (update, input, audio) thread limits. The draw thread always keeps its
-    /// own limit and is never part of a preset. These are a UI shortcut only — the underlying limit values remain the
-    /// single source of truth, so nothing here is persisted.
-    /// </summary>
-    public enum CustomFpsPreset
-    {
-        [Description("Custom")]
-        Custom,
+        private void onEngagementChanged()
+        {
+            if (enabledBindable.Value)
+            {
+                // Snapshot what the framework currently chose so we can hand control back cleanly on disable.
+                frameworkUpdateHz = host.MaximumUpdateHz;
+                frameworkAudioHz = host.AudioThread.ActiveHz;
+                frameworkInputHz = host.InputThread.ActiveHz;
 
-        [Description("1k (1000 FPS)")]
-        Tier1k,
+                applyLimits();
+            }
+            else
+            {
+                release();
+            }
 
-        [Description("2× (2000 FPS)")]
-        Tier2x,
+            updateSlidersVisibility();
+        }
 
-        [Description("4× (4000 FPS)")]
-        Tier4x,
+        private void onPresetChanged()
+        {
+            // Choosing a preset writes its rate into the per-thread sliders (a no-op while they're disabled, which is
+            // fine: the preset itself drives the applied value in that mode anyway).
+            if (presetBindable.Value != CustomFpsPreset.Custom)
+            {
+                double tier = presetToFrameLimit(presetBindable.Value);
 
-        [Description("8× (8000 FPS)")]
-        Tier8x,
+                updateLimit.Value = tier;
+                audioLimit.Value = tier;
+                inputLimit.Value = tier;
+            }
+
+            updateSlidersVisibility();
+            applyLimitsIfEnabled();
+        }
+
+        private void onFrameSyncChanged()
+        {
+            if (!enabledBindable.Value)
+                return;
+
+            // The framework just recomputed the update limit for the new mode; remember it as the value to restore on
+            // disable, then re-assert our own on top.
+            frameworkUpdateHz = host.MaximumUpdateHz;
+            applyLimits();
+        }
+
+        private void applyLimitsIfEnabled()
+        {
+            if (enabledBindable.Value)
+                applyLimits();
+        }
+
+        private void applyLimits()
+        {
+            // In Custom mode the per-thread sliders decide; otherwise the selected tier drives all three equally.
+            (double update, double audio, double input) = effectiveLimits();
+
+            // Update first (mutating it can schedule input-thread work), then audio, then input last.
+            host.MaximumUpdateHz = limitOrUnlimited(update);
+            host.AudioThread.ActiveHz = limitOrUnlimited(audio);
+            host.InputThread.ActiveHz = limitOrUnlimited(input);
+        }
+
+        private void release()
+        {
+            host.MaximumUpdateHz = frameworkUpdateHz;
+            host.AudioThread.ActiveHz = frameworkAudioHz;
+            host.InputThread.ActiveHz = frameworkInputHz;
+        }
+
+        private (double update, double audio, double input) effectiveLimits()
+        {
+            if (presetBindable.Value != CustomFpsPreset.Custom)
+            {
+                double tier = presetToFrameLimit(presetBindable.Value);
+                return (tier, tier, tier);
+            }
+
+            return (updateLimit.Value, audioLimit.Value, inputLimit.Value);
+        }
+
+        private void updateSlidersVisibility()
+        {
+            bool custom = presetBindable.Value == CustomFpsPreset.Custom;
+
+            if (custom)
+                customSlidersContainer.AutoSizeAxes |= Axes.Y;
+            else
+            {
+                customSlidersContainer.AutoSizeAxes &= ~Axes.Y;
+                customSlidersContainer.Height = 0;
+            }
+
+            bool editable = enabledBindable.Value;
+
+            updateLimit.Disabled = !editable;
+            audioLimit.Disabled = !editable;
+            inputLimit.Disabled = !editable;
+        }
+
+        private static double presetToFrameLimit(CustomFpsPreset preset) => preset switch
+        {
+            CustomFpsPreset.Tier1k => 1000d,
+            CustomFpsPreset.Tier2x => 2000d,
+            CustomFpsPreset.Tier4x => 4000d,
+            CustomFpsPreset.Tier8x => 8000d,
+            _ => 0d,
+        };
+
+        private static double limitOrUnlimited(double value) => value <= 0 ? double.MaxValue : value;
+
+        private static FormSliderBar<double> createLimiterSlider(string caption, Bindable<double> bindable) => new FormSliderBar<double>
+        {
+            Caption = caption,
+            KeyboardStep = 50,
+            TooltipFormat = v => v == 0 ? "Unlimited" : $"{v:0} FPS",
+            TransferValueOnCommit = true,
+            Current = { BindTarget = bindable },
+        };
     }
 }

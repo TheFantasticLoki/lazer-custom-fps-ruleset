@@ -17,18 +17,21 @@ Should comply with rules but use at your own risk, osu-plugins was blacklisted w
 
 ## How to use
 
-1. Set **Frame Sync** (Settings → Graphics) to **Basically unlimited**.
-2. Open the **Custom frame limiter** section in Settings — the sliders unlock while Frame Sync is on Basically unlimited, and lock again if you switch to any other mode.
+1. Open the **Custom frame limiter** section in Settings and turn on **Enable update-side limiter**.
+2. Pick a **Preset** (1k / 2× / 4× / 8×) — or **Custom** to reveal the per-thread update/audio/input sliders and set them yourself.
+
+While enabled, the limiter overrides the **update, input and audio** threads. The **draw/render** thread is always left to the game's own **Frame Sync** limiter (Settings → Graphics), which keeps its refresh-rate multipliers (2×/4×/8× refresh, VSync, etc.).
 
 | Control | Effect |
 | --- | --- |
-| **Preset** | Sets the update, input and audio limits together to 1k / 2× / 4× / 8×, or **Custom** for free per-thread control. The draw thread is never part of a preset. |
-| **Update thread** | FPS cap for the update (logic) thread — also the source value when syncing. |
-| **Sync input and audio to update** | Applies the update limit to the input and audio threads. The draw thread is never synced; stutter there is the most visible. |
-| **Input thread** | FPS cap for the input thread (hidden while synced). |
-| **Audio thread** | FPS cap for the audio thread (hidden while synced). |
-| **Draw thread** | FPS cap for the draw/render thread — always independent. |
-| **0 on any slider** | Truly unlimited for that thread. Benchmarking only — see below. |
+| **Enable update-side limiter** | Turns the limiter on/off. While off, the game's own thread limits apply untouched. |
+| **Preset** | Drives the update, input and audio limits together: 1k / 2× / 4× / 8×. Choose **Custom** to show the per-thread sliders. |
+| **Update thread** | FPS cap for the update (logic) thread — Custom mode only. |
+| **Audio thread** | FPS cap for the audio thread — Custom mode only. |
+| **Input thread** | FPS cap for the input thread — Custom mode only. |
+| **0 on any limit** | Truly unlimited for that thread. Benchmarking only — see below. |
+
+The draw/render thread is never touched here — control it with **Frame Sync** (Settings → Graphics).
 
 Your values are stored in the game's database alongside your other settings and survive restarts. Removing the ruleset removes its settings with it.
 
@@ -58,8 +61,8 @@ The intended workflow:
 Ordered by priority (startup → presets → Frame Sync → benchmark):
 
 - **Startup application** — *investigated.* A ruleset alone can't apply limits at cold boot: the only ruleset code that runs at launch (`CreateInstance`/`CreateConfig`) is handed no host, and osu gives rulesets no startup hook on purpose. Limits persist and re-apply whenever the settings panel opens. The planned ruleset-only way to skip opening settings is an optional **apply-on-play** path (engage limits the moment you start a map, via the ruleset's drawables).
-- **Preset tiers** — *done.* A **Preset** dropdown (1k / 2× / 4× / 8× / Custom) sets the update, input and audio limits together; the draw thread keeps its own slider. It's a UI shortcut over the same stored limits (nothing extra is persisted), so nothing overwrites anything else.
-- **Frame Sync integration** — a proper `Custom` frame sync option (like the fork has) instead of piggybacking on `Basically unlimited`, so nothing "overwrites" anything else.
+- **Preset tiers** — *done.* A **Preset** dropdown (1k / 2× / 4× / 8× / Custom) drives the update, input and audio limits together; the per-thread sliders only appear for **Custom**. The draw thread is left entirely to the game's own Frame Sync limiter.
+- **Frame Sync integration** — *reworked.* The limiter no longer piggybacks on `Basically unlimited`; it has its own on/off toggle and overrides the update-side threads regardless of Frame Sync mode, re-asserting itself whenever Frame Sync changes. Draw stays with the official Frame Sync (which keeps its refresh-rate multipliers).
 - **Benchmark mode** — measure your own 1% lows in-game and suggest limits automatically.
 
 ## Compatibility & credits
