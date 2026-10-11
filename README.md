@@ -22,6 +22,7 @@ Should comply with rules but use at your own risk, osu-plugins was blacklisted w
 
 | Control | Effect |
 | --- | --- |
+| **Preset** | Sets the update, input and audio limits together to 1k / 2× / 4× / 8×, or **Custom** for free per-thread control. The draw thread is never part of a preset. |
 | **Update thread** | FPS cap for the update (logic) thread — also the source value when syncing. |
 | **Sync input and audio to update** | Applies the update limit to the input and audio threads. The draw thread is never synced; stutter there is the most visible. |
 | **Input thread** | FPS cap for the input thread (hidden while synced). |
@@ -54,10 +55,12 @@ The intended workflow:
 
 ## Roadmap
 
-- **Benchmark mode** — measure your own 1% lows in-game and suggest limits automatically.
-- **Preset tiers** — default 1000, 2×, 4×, 8× options for the non-draw threads, with custom per-thread override, integrated into a single harmonious mode rather than separate settings fighting each other.
+Ordered by priority (startup → presets → Frame Sync → benchmark):
+
+- **Startup application** — *investigated.* A ruleset alone can't apply limits at cold boot: the only ruleset code that runs at launch (`CreateInstance`/`CreateConfig`) is handed no host, and osu gives rulesets no startup hook on purpose. Limits persist and re-apply whenever the settings panel opens. The planned ruleset-only way to skip opening settings is an optional **apply-on-play** path (engage limits the moment you start a map, via the ruleset's drawables).
+- **Preset tiers** — *done.* A **Preset** dropdown (1k / 2× / 4× / 8× / Custom) sets the update, input and audio limits together; the draw thread keeps its own slider. It's a UI shortcut over the same stored limits (nothing extra is persisted), so nothing overwrites anything else.
 - **Frame Sync integration** — a proper `Custom` frame sync option (like the fork has) instead of piggybacking on `Basically unlimited`, so nothing "overwrites" anything else.
-- **Startup application** — apply limits without needing to open settings first (requires a fork-side hook; not possible from a ruleset alone, from current knowledge, will investigate further).
+- **Benchmark mode** — measure your own 1% lows in-game and suggest limits automatically.
 
 ## Compatibility & credits
 

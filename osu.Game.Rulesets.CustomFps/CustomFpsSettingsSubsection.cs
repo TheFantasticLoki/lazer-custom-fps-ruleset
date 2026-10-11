@@ -2,6 +2,7 @@
 // See the LICENCE file in the repository root for full licence text.
 
 using System.Collections.Generic;
+using System.ComponentModel;
 using System.Linq;
 using osu.Framework.Allocation;
 using osu.Framework.Bindables;
@@ -20,8 +21,11 @@ namespace osu.Game.Rulesets.CustomFps
     /// The settings for this ruleset's per-thread frame limiter.
     /// </summary>
     /// <remarks>
-    /// The host limiter is wired up here because the settings overlay constructs every installed ruleset's settings
-    /// during game load (not on first open), making this a reliable startup hook. An uninstalled ruleset never gets
+    /// The host limiter is wired up the first time this settings panel is opened (osu only builds ruleset settings
+    /// sections on first open, not at game load). osu gives rulesets no startup hook — the only ruleset code that
+    /// runs at launch is <c>CreateInstance</c>/<c>CreateConfig</c>, which is handed no host — so limits cannot be
+    /// applied at cold boot from a ruleset alone; they persist here and re-apply the next time this panel opens (or
+    /// at startup on custom builds that apply ruleset configs themselves). An uninstalled ruleset never gets
     /// constructed, so nothing here can linger or conflict once the ruleset is removed.
     ///
     /// Only long-standing public <see cref="GameHost"/> API is used here (never fork-only members), so this ruleset
@@ -46,6 +50,14 @@ namespace osu.Game.Rulesets.CustomFps
         private Bindable<FrameSync> frameSyncBindable = null!;
 
         private SettingsNote unlimitedWarningNote = null!;
+
+        /// <summary>
+        /// UI-only convenience mirroring the current non-draw limits; the realm-stored limit values remain the single
+        /// source of truth, so this is derived from them and never persisted.
+        /// </summary>
+        private readonly Bindable<CustomFpsPreset> preset = new Bindable<CustomFpsPreset>(CustomFpsPreset.Custom);
+
+        private bool updatingPresetFromSliders;
 
         [Resolved]
         private GameHost host { get; set; } = null!;
@@ -107,6 +119,12 @@ namespace osu.Game.Rulesets.CustomFps
                 {
                     Keywords = new[] { "sync", "threads", "limit", "all" },
                 },
+                new SettingsEnumDropdown<CustomFpsPreset>
+                {
+                    LabelText = "Preset",
+                    Keywords = new[] { "preset", "tier", "fps", "limit", "quick", "1k", "2x", "4x", "8x" },
+                    Current = preset,
+                },
                 new SettingsItemV2(createLimiterSlider("Update thread", update))
                 {
                     Keywords = new[] { "update", "thread", "fps", "limit", "custom" },
@@ -160,10 +178,47 @@ namespace osu.Game.Rulesets.CustomFps
             draw.BindValueChanged(_ => onLimitsChanged());
             sync.BindValueChanged(_ => updateSyncedThreadsVisibility(), true);
 
+            // Selecting a preset drives the non-draw sliders together (draw keeps its own). Moving any slider by hand
+            // flips the preset back to Custom via updatePresetFromSliders, so the two never fight — the realm-stored
+            // limit values stay the single source of truth.
+            preset.BindValueChanged(p =>
+            {
+                if (updatingPresetFromSliders)
+                    return;
+
+                if (presetToFrameLimit(p.NewValue) is not { } limit)
+                    return;
+
+                update.Value = limit;
+                input.Value = limit;
+                audio.Value = limit;
+            });
+
+            // Seed the dropdown from the persisted limits on open.
+            updatePresetFromSliders();
+
             void onLimitsChanged()
             {
                 applyLimitsIfEngaged();
                 updateUnlimitedWarning();
+                updatePresetFromSliders();
+            }
+
+            void updatePresetFromSliders()
+            {
+                // When synced, the update limit alone drives input and audio, so it alone decides the tier.
+                var detected = sync.Value
+                    ? frameLimitToPreset(update.Value)
+                    : update.Value == input.Value && input.Value == audio.Value
+                        ? frameLimitToPreset(update.Value)
+                        : CustomFpsPreset.Custom;
+
+                if (detected == preset.Value)
+                    return;
+
+                updatingPresetFromSliders = true;
+                preset.Value = detected;
+                updatingPresetFromSliders = false;
             }
 
             void updateUnlimitedWarning()
@@ -217,6 +272,24 @@ namespace osu.Game.Rulesets.CustomFps
 
             static double limitOrUnlimited(double value) => value <= 0 ? double.MaxValue : value;
 
+            static double? presetToFrameLimit(CustomFpsPreset preset) => preset switch
+            {
+                CustomFpsPreset.Tier1k => 1000d,
+                CustomFpsPreset.Tier2x => 2000d,
+                CustomFpsPreset.Tier4x => 4000d,
+                CustomFpsPreset.Tier8x => 8000d,
+                _ => null,
+            };
+
+            static CustomFpsPreset frameLimitToPreset(double value) => value switch
+            {
+                1000 => CustomFpsPreset.Tier1k,
+                2000 => CustomFpsPreset.Tier2x,
+                4000 => CustomFpsPreset.Tier4x,
+                8000 => CustomFpsPreset.Tier8x,
+                _ => CustomFpsPreset.Custom,
+            };
+
             static FormSliderBar<double> createLimiterSlider(string caption, Bindable<double> bindable) => new FormSliderBar<double>
             {
                 Caption = caption,
@@ -226,5 +299,28 @@ namespace osu.Game.Rulesets.CustomFps
                 Current = { BindTarget = bindable },
             };
         }
+    }
+
+    /// <summary>
+    /// Convenience groupings for the non-draw (update, input, audio) thread limits. The draw thread always keeps its
+    /// own limit and is never part of a preset. These are a UI shortcut only — the underlying limit values remain the
+    /// single source of truth, so nothing here is persisted.
+    /// </summary>
+    public enum CustomFpsPreset
+    {
+        [Description("Custom")]
+        Custom,
+
+        [Description("1k (1000 FPS)")]
+        Tier1k,
+
+        [Description("2× (2000 FPS)")]
+        Tier2x,
+
+        [Description("4× (4000 FPS)")]
+        Tier4x,
+
+        [Description("8× (8000 FPS)")]
+        Tier8x,
     }
 }
