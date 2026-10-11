@@ -4,7 +4,7 @@
 
 An osu! ruleset that adds a **per-thread custom frame limiter** to the game.
 
-Originally a patch in osu-plugins osu-patches plugin, then rebuilt natively into a fork of lazer due to osu-plugins blacklisting for unrestricted loading of external code via IL-Weaving; Now reworked into a restricted targeted ruleset providing easier maintenance accross updates while utilizing the osu!framework API and standard ruleset configuration and no IL-Weaving to comply with rules.
+Originally a patch in osu-plugins osu-patches plugin, then rebuilt natively into a fork of lazer due to osu-plugins blacklisting for unrestricted loading of external code via IL-Weaving; Now reworked into a restricted targeted ruleset providing easier maintenance accross updates while utilizing the osu!framework API, standard ruleset configuration and no IL-Weaving to comply with rules.
 
 Should comply with rules but use at your own risk, osu-plugins was blacklisted with no player bans so in theory you should be okay to use this even if peppy decides to blacklist in the future.
 
@@ -57,7 +57,7 @@ The intended workflow:
 - **Benchmark mode** — measure your own 1% lows in-game and suggest limits automatically.
 - **Preset tiers** — default 1000, 2×, 4×, 8× options for the non-draw threads, with custom per-thread override, integrated into a single harmonious mode rather than separate settings fighting each other.
 - **Frame Sync integration** — a proper `Custom` frame sync option (like the fork has) instead of piggybacking on `Basically unlimited`, so nothing "overwrites" anything else.
-- **Startup application** — apply limits without needing to open settings first (requires a fork-side hook; not possible from a ruleset alone, by design).
+- **Startup application** — apply limits without needing to open settings first (requires a fork-side hook; not possible from a ruleset alone, from current knowledge, will investigate further).
 
 ## Compatibility & credits
 
