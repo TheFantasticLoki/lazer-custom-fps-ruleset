@@ -1,0 +1,9 @@
+## ignore Visual Studio temporary files
+.vs/
+# build results
+[Bb]in/
+[Oo]bj/
+# user-specific files
+*.suo
+*.user
+*.DotSettings.user
