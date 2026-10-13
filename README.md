@@ -11,29 +11,32 @@ Should comply with rules but use at your own risk, osu-plugins was blacklisted w
 
 ## Installation
 
-1. Build the project (`dotnet build`) or grab a release DLL.
+1. Build the project with the .NET 10 SDK (`dotnet build osu.Game.Rulesets.CustomFps/osu.Game.Rulesets.CustomFps.csproj -c Release`) or grab a release DLL. In VS Code, run **build (Release)** from the task list.
 2. Drop `osu.Game.Rulesets.CustomFps.dll` into your osu! `rulesets` folder (Settings → General → Open rulesets folder).
 3. Restart osu! if it was running.
 
 ## How to use
 
-1. Open the **Custom frame limiter** section in Settings and turn on **Enable update-side limiter**.
-2. Pick a **Preset** (1k / 2× / 4× / 8×) — or **Custom** to reveal the per-thread update/audio/input sliders and set them yourself.
+1. Open the **Custom frame limiter** section in Settings.
+2. For rendering, choose **Use Frame Sync** to keep the game's Graphics → Frame Sync choices (including VSync and refresh-rate multipliers), or choose **Custom** to reveal a custom draw-thread slider.
+3. Turn on **Enable update-side limiter** to control update, audio and input threads. Pick a **Preset** (1k / 2× / 4× / 8×) or choose **Custom** to reveal their per-thread sliders.
 
-While enabled, the limiter overrides the **update, input and audio** threads. The **draw/render** thread is always left to the game's own **Frame Sync** limiter (Settings → Graphics), which keeps its refresh-rate multipliers (2×/4×/8× refresh, VSync, etc.).
+The render and update-side limiters are independent. **Use Frame Sync** leaves rendering entirely to the game's Graphics settings; **Custom** temporarily overrides its draw-thread rate and restores the current Frame Sync-selected rate when switched back. The update-side toggle overrides update, input and audio regardless of Frame Sync mode.
+
+The settings are wired the first time the ruleset's settings panel is opened in each game session. Open the section once after launch to apply the saved settings; the ruleset API does not provide a cold-start hook.
 
 | Control | Effect |
 | --- | --- |
-| **Enable update-side limiter** | Turns the limiter on/off. While off, the game's own thread limits apply untouched. |
-| **Preset** | Drives the update, input and audio limits together: 1k / 2× / 4× / 8×. Choose **Custom** to show the per-thread sliders. |
-| **Update thread** | FPS cap for the update (logic) thread — Custom mode only. |
-| **Audio thread** | FPS cap for the audio thread — Custom mode only. |
-| **Input thread** | FPS cap for the input thread — Custom mode only. |
-| **0 on any limit** | Truly unlimited for that thread. Benchmarking only — see below. |
+| **Render thread limiter** | **Use Frame Sync** follows Graphics settings; **Custom** shows the draw-thread slider. |
+| **Draw thread** | Custom render cap, independent of update-side presets. |
+| **Enable update-side limiter** | Turns the update/input/audio limiter on or off. When off, those threads use game-selected limits. |
+| **Preset** | Drives update, input and audio together: 1k / 2× / 4× / 8×. Choose **Custom** to show per-thread sliders. Changing presets does not overwrite saved Custom values. |
+| **Update thread** | FPS cap for the update (logic) thread — visible in update-side Custom mode. |
+| **Audio thread** | FPS cap for the audio thread — visible in update-side Custom mode. |
+| **Input thread** | FPS cap for the input thread — visible in update-side Custom mode. |
+| **0 on an active custom limit** | Truly unlimited for that thread. A critical warning appears only while an active custom limit is set to 0. Benchmarking only — see below. |
 
-The draw/render thread is never touched here — control it with **Frame Sync** (Settings → Graphics).
-
-Your values are stored in the game's database alongside your other settings and survive restarts. Removing the ruleset removes its settings with it.
+Your values are stored in the game's database alongside your other settings and survive restarts. If the ruleset is removed, its settings are no longer active; database rows may remain and be reused if the ruleset is installed again.
 
 ## ⚠️ Warnings
 
@@ -47,22 +50,23 @@ Issues that only occur with this ruleset installed will be closed on the officia
 
 ### Don't play with 0 (unlimited)
 
-A slider set to `0` means that thread runs **completely uncapped**. That will stutter, spike your frametimes, and cook your hardware for no gameplay benefit.
+An **active custom limit** set to `0` means that thread runs **completely uncapped**. A saved zero in a hidden Custom slider or an inactive limiter does not apply. Running uncapped can stutter, spike frametimes, and use excess power for no gameplay benefit.
 
 The intended workflow:
 
-1. Set the thread(s) you're testing to `0` and play a demanding map.
-2. Watch your frame times and find your **1% lows** (the framerate you dip *to*, not the average).
-3. Set your sliders **slightly above** those 1% low values.
-4. Play like that daily. That's the whole point of the tool.
+1. Enable the relevant limiter, choose **Custom**, and set only the thread(s) you're testing to `0`.
+2. Play a demanding map briefly.
+3. Watch your frame times and find your **1% lows** (the framerate you dip *to*, not the average).
+4. Set your custom limits **slightly above** those 1% low values.
+5. Play like that daily. That's the whole point of the tool.
 
 ## Roadmap
 
 Ordered by priority (startup → presets → Frame Sync → benchmark):
 
 - **Startup application** — *investigated.* A ruleset alone can't apply limits at cold boot: the only ruleset code that runs at launch (`CreateInstance`/`CreateConfig`) is handed no host, and osu gives rulesets no startup hook on purpose. Limits persist and re-apply whenever the settings panel opens. The planned ruleset-only way to skip opening settings is an optional **apply-on-play** path (engage limits the moment you start a map, via the ruleset's drawables).
-- **Preset tiers** — *done.* A **Preset** dropdown (1k / 2× / 4× / 8× / Custom) drives the update, input and audio limits together; the per-thread sliders only appear for **Custom**. The draw thread is left entirely to the game's own Frame Sync limiter.
-- **Frame Sync integration** — *reworked.* The limiter no longer piggybacks on `Basically unlimited`; it has its own on/off toggle and overrides the update-side threads regardless of Frame Sync mode, re-asserting itself whenever Frame Sync changes. Draw stays with the official Frame Sync (which keeps its refresh-rate multipliers).
+- **Preset tiers** — *done.* A **Preset** dropdown (1k / 2× / 4× / 8× / Custom) drives update, input and audio together; the custom sliders only appear for **Custom** and retain their values when presets change.
+- **Frame Sync integration** — *reworked.* The update-side limiter has its own on/off toggle and re-asserts when Frame Sync changes. Rendering can follow the official Frame Sync modes and refresh-rate multipliers, or use a separate custom draw-thread limit.
 - **Benchmark mode** — measure your own 1% lows in-game and suggest limits automatically.
 
 ## Compatibility & credits

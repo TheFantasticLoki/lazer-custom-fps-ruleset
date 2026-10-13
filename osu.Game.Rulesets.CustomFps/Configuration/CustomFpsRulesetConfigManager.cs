@@ -14,12 +14,13 @@ namespace osu.Game.Rulesets.CustomFps.Configuration
     /// </summary>
     /// <remarks>
     /// Uses the standard ruleset config mechanism, which stores values as databased rows rather than in a shared ini
-    /// file, so official builds and other rulesets can never collide with or corrupt these settings. Removing the
-    /// ruleset simply removes its settings along with it.
+    /// file, so official builds and other rulesets can never collide with or corrupt these settings. If the ruleset
+    /// is removed, its settings are no longer active; the database rows may remain and be reused if it is installed
+    /// again.
     ///
-    /// While enabled, it overrides the update, input and audio thread limits regardless of the game's frame sync mode
-    /// (the draw thread is always left to the game's own frame limiter). The chosen limits persist here and are
-    /// re-applied the next time the settings panel opens.
+    /// Update, input and audio limits are controlled by the update-side limiter. The draw thread can either follow the
+    /// game's frame sync mode or use its own custom limit. The chosen limits persist here and are re-applied the next
+    /// time the settings panel opens.
     /// </remarks>
     public class CustomFpsRulesetConfigManager : RulesetConfigManager<CustomFpsRulesetSetting>
     {
@@ -36,6 +37,8 @@ namespace osu.Game.Rulesets.CustomFps.Configuration
             SetDefault(CustomFpsRulesetSetting.InputThreadLimit, 1000.0, 0.0, 8000.0, 1.0);
             SetDefault(CustomFpsRulesetSetting.AudioThreadLimit, 1000.0, 0.0, 8000.0, 1.0);
             SetDefault(CustomFpsRulesetSetting.UpdateThreadLimit, 1000.0, 0.0, 8000.0, 1.0);
+            SetDefault(CustomFpsRulesetSetting.DrawThreadLimit, 1000.0, 0.0, 8000.0, 1.0);
+            SetDefault(CustomFpsRulesetSetting.RenderMode, CustomFpsRenderMode.UseFrameSync);
         }
     }
 
@@ -43,7 +46,7 @@ namespace osu.Game.Rulesets.CustomFps.Configuration
     {
         /// <summary>
         /// Whether the update-side limiter is active. While active it overrides the update, input and audio thread
-        /// limits; the draw thread is always left to the game's own frame limiter.
+        /// limits. Render-thread limiting is controlled separately by <see cref="RenderMode"/>.
         /// </summary>
         Enabled,
 
@@ -67,11 +70,22 @@ namespace osu.Game.Rulesets.CustomFps.Configuration
         /// Frame rate limit for the input thread, in FPS. 0 is treated as unlimited. Only used in Custom mode.
         /// </summary>
         InputThreadLimit,
+
+        /// <summary>
+        /// Frame rate limit for the draw thread, in FPS. 0 is treated as unlimited. Only used in custom render mode.
+        /// </summary>
+        DrawThreadLimit,
+
+        /// <summary>
+        /// Whether the draw thread follows the game's frame sync or uses a custom limit.
+        /// </summary>
+        RenderMode,
     }
 
     /// <summary>
-    /// Preset tiers for the update-side limiter. The draw thread is never part of a preset — it is always governed by
-    /// the game's own frame limiter, which keeps its refresh-rate multipliers.
+    /// Preset tiers for the update-side limiter. The draw thread is never part of an update preset; it has a separate
+    /// render mode that can either follow the game's frame sync (and keep its refresh-rate multipliers) or use a
+    /// custom limit.
     /// </summary>
     public enum CustomFpsPreset
     {
@@ -89,5 +103,17 @@ namespace osu.Game.Rulesets.CustomFps.Configuration
 
         [Description("8× (8000 FPS)")]
         Tier8x,
+    }
+
+    /// <summary>
+    /// Selects whether rendering follows the game's built-in frame sync or uses a custom draw-thread limit.
+    /// </summary>
+    public enum CustomFpsRenderMode
+    {
+        [Description("Use Frame Sync")]
+        UseFrameSync,
+
+        [Description("Custom")]
+        Custom,
     }
 }
