@@ -39,6 +39,8 @@ namespace osu.Game.Rulesets.CustomFps.Configuration
             SetDefault(CustomFpsRulesetSetting.UpdateThreadLimit, 1000.0, 0.0, 8000.0, 1.0);
             SetDefault(CustomFpsRulesetSetting.DrawThreadLimit, 1000.0, 0.0, 8000.0, 1.0);
             SetDefault(CustomFpsRulesetSetting.RenderMode, CustomFpsRenderMode.UseFrameSync);
+            SetDefault(CustomFpsRulesetSetting.CaptureBufferSeconds, 5.0, 0.0, 30.0, 1.0);
+            SetDefault(CustomFpsRulesetSetting.SyncInputAudioWithUpdate, false);
         }
     }
 
@@ -52,7 +54,8 @@ namespace osu.Game.Rulesets.CustomFps.Configuration
 
         /// <summary>
         /// Which preset drives the update-side limits. <see cref="CustomFpsPreset.Custom"/> uses the per-thread
-        /// sliders; any other value uses that tier's fixed rate for all three threads.
+        /// sliders, with input and audio optionally following the update limit; any other value uses that tier's
+        /// fixed rate for all three threads.
         /// </summary>
         PresetMode,
 
@@ -80,6 +83,16 @@ namespace osu.Game.Rulesets.CustomFps.Configuration
         /// Whether the draw thread follows the game's frame sync or uses a custom limit.
         /// </summary>
         RenderMode,
+
+        /// <summary>
+        /// Number of seconds to exclude from the start and end of a manual performance capture.
+        /// </summary>
+        CaptureBufferSeconds,
+
+        /// <summary>
+        /// Whether custom input and audio limits follow the custom update-thread limit.
+        /// </summary>
+        SyncInputAudioWithUpdate,
     }
 
     /// <summary>

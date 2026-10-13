@@ -1,12 +1,16 @@
 // Copyright (c) ppy Pty Ltd <contact@ppy.sh>. Licensed under the MIT Licence.
 // See the LICENCE file in the repository root for full licence text.
 
+using System;
+using System.Collections.Generic;
+using System.Linq;
 using osu.Framework.Allocation;
 using osu.Framework.Bindables;
 using osu.Framework.Configuration;
 using osu.Framework.Graphics;
 using osu.Framework.Graphics.Containers;
 using osu.Framework.Platform;
+using osu.Framework.Threading;
 using osu.Game.Graphics.UserInterfaceV2;
 using osu.Game.Overlays.Settings;
 using osu.Game.Rulesets.CustomFps.Configuration;
@@ -43,6 +47,8 @@ namespace osu.Game.Rulesets.CustomFps
 
         private FillFlowContainer customSlidersContainer = null!;
 
+        private FillFlowContainer customThreadSlidersContainer = null!;
+
         private FillFlowContainer customDrawSliderContainer = null!;
 
         private Bindable<bool> enabledBindable = null!;
@@ -59,11 +65,54 @@ namespace osu.Game.Rulesets.CustomFps
 
         private Bindable<double> drawLimit = null!;
 
+        private Bindable<double> captureBufferSeconds = null!;
+
+        private Bindable<bool> syncInputAudioWithUpdate = null!;
+
         private Bindable<FrameSync> frameSyncBindable = null!;
 
         private Bindable<ExecutionMode> executionModeBindable = null!;
 
         private SettingsNote unlimitedWarningNote = null!;
+
+        private SettingsNote sessionMetricsNote = null!;
+
+        private SettingsButtonV2 applySuggestedLimitsButton = null!;
+
+        private SettingsButtonV2 collectionButton = null!;
+
+        private SettingsButtonV2 clearDataButton = null!;
+
+        private readonly Queue<PerformanceSample> performanceSamples = new Queue<PerformanceSample>();
+
+        private readonly List<PerformanceSample> currentCaptureSamples = new List<PerformanceSample>();
+
+        private bool isCollecting;
+
+        private double captureStartTime;
+
+        private int lastCaptureSamplesRetained = -1;
+
+        private ScheduledDelegate captureSamplingTask = null!;
+
+        private ScheduledDelegate metricsDisplayTask = null!;
+
+        private const double metrics_sample_interval = 250;
+
+        private const double metrics_display_interval = 1000;
+
+        private const int maximum_metrics_samples = 1200;
+
+        private const int minimum_samples_for_suggestion = 120;
+
+        private const int maximum_capture_samples = 12000;
+
+        private struct PerformanceSample
+        {
+            public double Time;
+            public double UpdateFps;
+            public double DrawFps;
+        }
 
         // Framework-chosen values, snapshotted so we can hand control back cleanly when the limiter is turned off.
         private double frameworkUpdateHz;
@@ -89,20 +138,121 @@ namespace osu.Game.Rulesets.CustomFps
             audioLimit = config.GetBindable<double>(CustomFpsRulesetSetting.AudioThreadLimit);
             updateLimit = config.GetBindable<double>(CustomFpsRulesetSetting.UpdateThreadLimit);
             drawLimit = config.GetBindable<double>(CustomFpsRulesetSetting.DrawThreadLimit);
+            captureBufferSeconds = config.GetBindable<double>(CustomFpsRulesetSetting.CaptureBufferSeconds);
+            syncInputAudioWithUpdate = config.GetBindable<bool>(CustomFpsRulesetSetting.SyncInputAudioWithUpdate);
 
             Children = new Drawable[]
             {
+                sessionMetricsNote = new SettingsNote
+                {
+                    RelativeSizeAxes = Axes.X,
+                    Current =
+                    {
+                        Value = new SettingsNote.Data("MANUAL PERFORMANCE CAPTURE", SettingsNote.Type.Informational),
+                    },
+                },
                 new SettingsNote
                 {
                     RelativeSizeAxes = Axes.X,
                     Current =
                     {
-                        Value = new SettingsNote.Data("Rendering can follow the game's Frame Sync modes or use a custom draw limit. The separate update-side limiter controls update, input and audio.", SettingsNote.Type.Informational),
+                        Value = new SettingsNote.Data("Start collection before a play, then stop it after gameplay. A configurable buffer is trimmed from both ends so loading and post-play screens can be excluded.", SettingsNote.Type.Informational),
+                    },
+                },
+                collectionButton = new SettingsButtonV2
+                {
+                    Text = "Start collecting",
+                    Keywords = new[] { "start", "stop", "collect", "capture", "performance", "fps" },
+                    Action = toggleCollection,
+                },
+                clearDataButton = new SettingsButtonV2
+                {
+                    Text = "Clear collected data",
+                    Keywords = new[] { "clear", "reset", "delete", "performance", "fps" },
+                    Action = clearCollectedData,
+                    Enabled = { Value = false },
+                },
+                new SettingsItemV2(new FormSliderBar<double>
+                {
+                    Caption = "Start/end buffer",
+                    HintText = "This many seconds are excluded from both the beginning and end when you stop a capture.",
+                    KeyboardStep = 1,
+                    TooltipFormat = v => $"{v:0} seconds",
+                    TransferValueOnCommit = true,
+                    Current = { BindTarget = captureBufferSeconds },
+                })
+                {
+                    Keywords = new[] { "buffer", "seconds", "trim", "capture", "loading", "results" },
+                },
+                applySuggestedLimitsButton = new SettingsButtonV2
+                {
+                    Text = "Apply suggested limits",
+                    TooltipText = "Uses 5% below the 1% lows from the manually collected samples.",
+                    Keywords = new[] { "suggested", "recommended", "capture", "fps", "limits" },
+                    Action = applySuggestedLimits,
+                    Enabled = { Value = false },
+                },
+                new SettingsItemV2(new FormCheckBox
+                {
+                    Caption = "Enable update-side limiter",
+                    HintText = "The preset or custom limits override update, input and audio. Rendering is controlled separately below.",
+                    Current = enabledBindable,
+                })
+                {
+                    Keywords = new[] { "enable", "on", "off", "toggle", "limiter" },
+                },
+                new SettingsEnumDropdown<CustomFpsPreset>
+                {
+                    LabelText = "Update / input / audio preset",
+                    Keywords = new[] { "preset", "tier", "fps", "limit", "quick", "1k", "2x", "4x", "8x", "custom" },
+                    Current = presetBindable,
+                },
+                customSlidersContainer = new FillFlowContainer
+                {
+                    RelativeSizeAxes = Axes.X,
+                    AutoSizeAxes = Axes.Y,
+                    Direction = FillDirection.Vertical,
+                    Spacing = new Vector2(0, 5),
+                    Masking = true,
+                    Children = new Drawable[]
+                    {
+                        new SettingsItemV2(createLimiterSlider("Update thread", updateLimit))
+                        {
+                            Keywords = new[] { "update", "thread", "fps", "limit", "custom" },
+                        },
+                        new SettingsItemV2(new FormCheckBox
+                        {
+                            Caption = "Sync input and audio with update",
+                            HintText = "Use the update-thread limit for input and audio instead of their saved custom limits.",
+                            Current = syncInputAudioWithUpdate,
+                        })
+                        {
+                            Keywords = new[] { "sync", "input", "audio", "update", "thread", "fps", "custom" },
+                        },
+                        customThreadSlidersContainer = new FillFlowContainer
+                        {
+                            RelativeSizeAxes = Axes.X,
+                            AutoSizeAxes = Axes.Y,
+                            Direction = FillDirection.Vertical,
+                            Spacing = new Vector2(0, 5),
+                            Masking = true,
+                            Children = new Drawable[]
+                            {
+                                new SettingsItemV2(createLimiterSlider("Audio thread", audioLimit))
+                                {
+                                    Keywords = new[] { "audio", "thread", "fps", "limit", "custom" },
+                                },
+                                new SettingsItemV2(createLimiterSlider("Input thread", inputLimit))
+                                {
+                                    Keywords = new[] { "input", "thread", "fps", "limit", "custom" },
+                                },
+                            },
+                        },
                     },
                 },
                 new SettingsEnumDropdown<CustomFpsRenderMode>
                 {
-                    LabelText = "Render thread limiter",
+                    LabelText = "Render thread limit",
                     Keywords = new[] { "render", "draw", "frame sync", "refresh rate", "custom" },
                     Current = renderModeBindable,
                 },
@@ -121,47 +271,9 @@ namespace osu.Game.Rulesets.CustomFps
                         },
                     },
                 },
-                new SettingsItemV2(new FormCheckBox
-                {
-                    Caption = "Enable update-side limiter",
-                    HintText = "While on, the preset or custom limits below override the update, input and audio threads regardless of Frame Sync mode. Turn off to hand control back to the game.",
-                    Current = enabledBindable,
-                })
-                {
-                    Keywords = new[] { "enable", "on", "off", "toggle", "limiter" },
-                },
                 unlimitedWarningNote = new SettingsNote
                 {
                     RelativeSizeAxes = Axes.X,
-                },
-                new SettingsEnumDropdown<CustomFpsPreset>
-                {
-                    LabelText = "Preset",
-                    Keywords = new[] { "preset", "tier", "fps", "limit", "quick", "1k", "2x", "4x", "8x", "custom" },
-                    Current = presetBindable,
-                },
-                customSlidersContainer = new FillFlowContainer
-                {
-                    RelativeSizeAxes = Axes.X,
-                    AutoSizeAxes = Axes.Y,
-                    Direction = FillDirection.Vertical,
-                    Spacing = new Vector2(0, 5),
-                    Masking = true,
-                    Children = new Drawable[]
-                    {
-                        new SettingsItemV2(createLimiterSlider("Update thread", updateLimit))
-                        {
-                            Keywords = new[] { "update", "thread", "fps", "limit", "custom" },
-                        },
-                        new SettingsItemV2(createLimiterSlider("Audio thread", audioLimit))
-                        {
-                            Keywords = new[] { "audio", "thread", "fps", "limit", "custom" },
-                        },
-                        new SettingsItemV2(createLimiterSlider("Input thread", inputLimit))
-                        {
-                            Keywords = new[] { "input", "thread", "fps", "limit", "custom" },
-                        },
-                    },
                 },
                 new SettingsNote
                 {
@@ -172,6 +284,9 @@ namespace osu.Game.Rulesets.CustomFps
                     },
                 },
             };
+
+            metricsDisplayTask = host.UpdateThread.Scheduler.AddDelayed(updateSessionMetricsDisplay, metrics_display_interval, repeat: true);
+            updateSessionMetricsDisplay();
 
             frameSyncBindable = host.Dependencies.Get<FrameworkConfigManager>().GetBindable<FrameSync>(FrameworkSetting.FrameSync);
             executionModeBindable = host.Dependencies.Get<FrameworkConfigManager>().GetBindable<ExecutionMode>(FrameworkSetting.ExecutionMode);
@@ -187,6 +302,7 @@ namespace osu.Game.Rulesets.CustomFps
             updateLimit.BindValueChanged(_ => onUpdateLimitChanged());
             audioLimit.BindValueChanged(_ => onUpdateLimitChanged());
             inputLimit.BindValueChanged(_ => onUpdateLimitChanged());
+            syncInputAudioWithUpdate.BindValueChanged(_ => onSyncInputAudioChanged());
             drawLimit.BindValueChanged(_ => applyDrawLimitIfCustom());
             renderModeBindable.BindValueChanged(_ => onRenderModeChanged());
             // These handlers are registered after the framework's own handlers, so the latest framework-selected
@@ -198,6 +314,162 @@ namespace osu.Game.Rulesets.CustomFps
             onEngagementChanged();
             onRenderModeChanged();
         }
+
+        protected override void Dispose(bool isDisposing)
+        {
+            if (isDisposing)
+            {
+                if (isCollecting)
+                    stopCollection();
+
+                metricsDisplayTask?.Cancel();
+            }
+
+            base.Dispose(isDisposing);
+        }
+
+        private void toggleCollection()
+        {
+            if (isCollecting)
+                stopCollection();
+            else
+                startCollection();
+        }
+
+        private void startCollection()
+        {
+            currentCaptureSamples.Clear();
+            captureStartTime = host.UpdateThread.Clock.CurrentTime;
+            isCollecting = true;
+            collectionButton.Text = "Stop and review";
+            clearDataButton.Enabled.Value = false;
+            captureSamplingTask = host.UpdateThread.Scheduler.AddDelayed(sampleCapture, metrics_sample_interval, repeat: true);
+            updateSessionMetricsDisplay();
+        }
+
+        private void stopCollection()
+        {
+            if (!isCollecting)
+                return;
+
+            double captureEndTime = host.UpdateThread.Clock.CurrentTime;
+            double trimStart = captureStartTime + captureBufferSeconds.Value * 1000;
+            double trimEnd = captureEndTime - captureBufferSeconds.Value * 1000;
+            int retainedSampleCount = 0;
+
+            captureSamplingTask?.Cancel();
+            captureSamplingTask = null;
+
+            foreach (PerformanceSample sample in currentCaptureSamples)
+            {
+                if (sample.Time < trimStart || sample.Time > trimEnd)
+                    continue;
+
+                performanceSamples.Enqueue(sample);
+                if (performanceSamples.Count > maximum_metrics_samples)
+                    performanceSamples.Dequeue();
+
+                retainedSampleCount++;
+            }
+
+            currentCaptureSamples.Clear();
+            isCollecting = false;
+            lastCaptureSamplesRetained = retainedSampleCount;
+            collectionButton.Text = "Start collecting";
+            updateSessionMetricsDisplay();
+        }
+
+        private void clearCollectedData()
+        {
+            if (isCollecting)
+                return;
+
+            performanceSamples.Clear();
+            lastCaptureSamplesRetained = -1;
+            updateSessionMetricsDisplay();
+        }
+
+        private void sampleCapture()
+        {
+            if (!isCollecting || !host.IsActive.Value)
+                return;
+
+            double updateFps = host.UpdateThread.Clock.FramesPerSecond;
+            double drawFps = host.DrawThread.Clock.FramesPerSecond;
+
+            if (updateFps <= 0 || drawFps <= 0 || double.IsNaN(updateFps) || double.IsNaN(drawFps)
+                               || double.IsInfinity(updateFps) || double.IsInfinity(drawFps))
+                return;
+
+            currentCaptureSamples.Add(new PerformanceSample
+            {
+                Time = host.UpdateThread.Clock.CurrentTime,
+                UpdateFps = updateFps,
+                DrawFps = drawFps,
+            });
+
+            if (currentCaptureSamples.Count > maximum_capture_samples)
+                currentCaptureSamples.RemoveAt(0);
+        }
+
+        private void updateSessionMetricsDisplay()
+        {
+            string captureStatus = isCollecting
+                ? $"COLLECTING ({currentCaptureSamples.Count} samples) — stop after gameplay to review."
+                : lastCaptureSamplesRetained < 0
+                    ? "NOT COLLECTING — retained readings are unchanged until the next capture."
+                    : lastCaptureSamplesRetained == 0
+                        ? "LAST CAPTURE: no samples survived the buffer. Try a longer capture or smaller buffer."
+                        : $"LAST CAPTURE: {lastCaptureSamplesRetained} samples retained.";
+
+            clearDataButton.Enabled.Value = !isCollecting && performanceSamples.Count > 0;
+
+            if (performanceSamples.Count == 0)
+            {
+                sessionMetricsNote.Current.Value = new SettingsNote.Data($"NO RETAINED CAPTURE DATA\n{captureStatus}", SettingsNote.Type.Informational);
+                applySuggestedLimitsButton.Enabled.Value = false;
+                return;
+            }
+
+            (double updateMinimum, double updateOnePercentLow) = summarize(performanceSamples.Select(s => s.UpdateFps));
+            (double drawMinimum, double drawOnePercentLow) = summarize(performanceSamples.Select(s => s.DrawFps));
+            double suggestedUpdateLimit = suggestedLimit(updateOnePercentLow);
+            double suggestedDrawLimit = suggestedLimit(drawOnePercentLow);
+
+            string readout = $"RETAINED CAPTURE DATA ({performanceSamples.Count} samples)\n"
+                             + $"UPDATE  1% LOW {updateOnePercentLow:0}  |  MIN {updateMinimum:0} FPS\n"
+                             + $"RENDER  1% LOW {drawOnePercentLow:0}  |  MIN {drawMinimum:0} FPS\n"
+                             + $"SUGGESTED CAPS (-5%): UPDATE {suggestedUpdateLimit:0}  |  RENDER {suggestedDrawLimit:0} FPS\n"
+                             + captureStatus;
+
+            sessionMetricsNote.Current.Value = new SettingsNote.Data(readout, SettingsNote.Type.Informational);
+            applySuggestedLimitsButton.Enabled.Value = performanceSamples.Count >= minimum_samples_for_suggestion;
+        }
+
+        private void applySuggestedLimits()
+        {
+            if (performanceSamples.Count < minimum_samples_for_suggestion)
+                return;
+
+            double updateOnePercentLow = summarize(performanceSamples.Select(s => s.UpdateFps)).onePercentLow;
+            double drawOnePercentLow = summarize(performanceSamples.Select(s => s.DrawFps)).onePercentLow;
+
+            enabledBindable.Value = true;
+            presetBindable.Value = CustomFpsPreset.Custom;
+            renderModeBindable.Value = CustomFpsRenderMode.Custom;
+            updateLimit.Value = suggestedLimit(updateOnePercentLow);
+            drawLimit.Value = suggestedLimit(drawOnePercentLow);
+        }
+
+        private static (double minimum, double onePercentLow) summarize(IEnumerable<double> samples)
+        {
+            double[] ordered = samples.OrderBy(fps => fps).ToArray();
+            int onePercentLowIndex = Math.Max(0, (int)Math.Ceiling(ordered.Length * 0.01) - 1);
+
+            return (ordered[0], ordered[onePercentLowIndex]);
+        }
+
+        private static double suggestedLimit(double onePercentLow) => Math.Clamp(Math.Floor(onePercentLow * 0.95), 1, 8000);
 
         private void onEngagementChanged()
         {
@@ -230,6 +502,13 @@ namespace osu.Game.Rulesets.CustomFps
         private void onUpdateLimitChanged()
         {
             applyLimitsIfEnabled();
+            updateUnlimitedWarning();
+        }
+
+        private void onSyncInputAudioChanged()
+        {
+            applyLimitsIfEnabled();
+            updateVisibility();
             updateUnlimitedWarning();
         }
 
@@ -286,7 +565,7 @@ namespace osu.Game.Rulesets.CustomFps
 
         private void applyLimits()
         {
-            // In Custom mode the per-thread sliders decide; otherwise the selected preset drives all three equally.
+            // In Custom mode, input and audio either use their own sliders or follow the update limit.
             (double update, double audio, double input) = effectiveLimits();
 
             // Update first (mutating it can schedule input-thread work), then audio, then input last.
@@ -321,7 +600,9 @@ namespace osu.Game.Rulesets.CustomFps
                 return (tier, tier, tier);
             }
 
-            return (updateLimit.Value, audioLimit.Value, inputLimit.Value);
+            return syncInputAudioWithUpdate.Value
+                ? (updateLimit.Value, updateLimit.Value, updateLimit.Value)
+                : (updateLimit.Value, audioLimit.Value, inputLimit.Value);
         }
 
         private void updateVisibility()
@@ -349,8 +630,18 @@ namespace osu.Game.Rulesets.CustomFps
             bool updateEditable = enabledBindable.Value && customUpdate;
 
             updateLimit.Disabled = !updateEditable;
-            audioLimit.Disabled = !updateEditable;
-            inputLimit.Disabled = !updateEditable;
+            bool customThreadLimitsVisible = customUpdate && !syncInputAudioWithUpdate.Value;
+
+            if (customThreadLimitsVisible)
+                customThreadSlidersContainer.AutoSizeAxes |= Axes.Y;
+            else
+            {
+                customThreadSlidersContainer.AutoSizeAxes &= ~Axes.Y;
+                customThreadSlidersContainer.Height = 0;
+            }
+
+            audioLimit.Disabled = !updateEditable || syncInputAudioWithUpdate.Value;
+            inputLimit.Disabled = !updateEditable || syncInputAudioWithUpdate.Value;
             drawLimit.Disabled = !customDraw;
         }
 
@@ -358,11 +649,12 @@ namespace osu.Game.Rulesets.CustomFps
         {
             bool updateUnlimited = enabledBindable.Value
                                    && presetBindable.Value == CustomFpsPreset.Custom
-                                   && (updateLimit.Value <= 0 || audioLimit.Value <= 0 || inputLimit.Value <= 0);
+                                   && (updateLimit.Value <= 0
+                                       || (!syncInputAudioWithUpdate.Value && (audioLimit.Value <= 0 || inputLimit.Value <= 0)));
             bool drawUnlimited = renderModeBindable.Value == CustomFpsRenderMode.Custom && drawLimit.Value <= 0;
 
             unlimitedWarningNote.Current.Value = updateUnlimited || drawUnlimited
-                ? new SettingsNote.Data("An active thread is set to truly unlimited (0). Use this only for brief benchmarking; it can cause stutter and high power use.", SettingsNote.Type.Critical)
+                ? new SettingsNote.Data("An active thread is set to truly unlimited (0). Use this only for brief manual testing; it can cause stutter and high power use.", SettingsNote.Type.Critical)
                 : null;
         }
 
@@ -380,7 +672,7 @@ namespace osu.Game.Rulesets.CustomFps
         private static FormSliderBar<double> createLimiterSlider(string caption, Bindable<double> bindable) => new FormSliderBar<double>
         {
             Caption = caption,
-            HintText = "0 means truly unlimited; use only for brief benchmarking.",
+            HintText = "0 means truly unlimited; use only for brief manual testing.",
             KeyboardStep = 50,
             TooltipFormat = v => v == 0 ? "Unlimited" : $"{v:0} FPS",
             TransferValueOnCommit = true,

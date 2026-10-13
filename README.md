@@ -28,7 +28,7 @@ My philosophy is, educate the user about the risks, how they should approach the
 
 1. Open the **Custom frame limiter** section in Settings.
 2. For rendering, choose **Use Frame Sync** to keep the game's Graphics → Frame Sync choices (including VSync and refresh-rate multipliers), or choose **Custom** to reveal a custom draw-thread slider.
-3. Turn on **Enable update-side limiter** to control update, audio and input threads. Pick a **Preset** (1k / 2× / 4× / 8×) or choose **Custom** to reveal their per-thread sliders.
+3. Turn on **Enable update-side limiter** to control update, audio and input threads. Pick a **Preset** (1k / 2× / 4× / 8×) or choose **Custom** to reveal the update limit and the optional per-thread controls.
 
 The render and update-side limiters are independent. **Use Frame Sync** leaves rendering entirely to the game's Graphics settings; **Custom** temporarily overrides its draw-thread rate and restores the current Frame Sync-selected rate when switched back. The update-side toggle overrides update, input and audio regardless of Frame Sync mode.
 
@@ -39,13 +39,22 @@ The settings are wired the first time the ruleset's settings panel is opened in 
 | **Render thread limiter** | **Use Frame Sync** follows Graphics settings; **Custom** shows the draw-thread slider. |
 | **Draw thread** | Custom render cap, independent of update-side presets. |
 | **Enable update-side limiter** | Turns the update/input/audio limiter on or off. When off, those threads use game-selected limits. |
-| **Preset** | Drives update, input and audio together: 1k / 2× / 4× / 8×. Choose **Custom** to show per-thread sliders. Changing presets does not overwrite saved Custom values. |
+| **Preset** | Drives update, input and audio together: 1k / 2× / 4× / 8×. Choose **Custom** to show custom controls. Changing presets does not overwrite saved Custom values. |
 | **Update thread** | FPS cap for the update (logic) thread — visible in update-side Custom mode. |
-| **Audio thread** | FPS cap for the audio thread — visible in update-side Custom mode. |
-| **Input thread** | FPS cap for the input thread — visible in update-side Custom mode. |
-| **0 on an active custom limit** | Truly unlimited for that thread. A critical warning appears only while an active custom limit is set to 0. Benchmarking only — see below. |
+| **Sync input and audio with update** | In Custom mode, makes input and audio use the update limit and hides their separate sliders. Their saved custom values are preserved while sync is enabled. |
+| **Audio thread** | Independent FPS cap for the audio thread — visible in update-side Custom mode when sync is off. |
+| **Input thread** | Independent FPS cap for the input thread — visible in update-side Custom mode when sync is off. |
+| **0 on an active custom limit** | Truly unlimited for that thread. A critical warning appears only while an active custom limit is set to 0. Avoid this for normal play. |
 
 Your values are stored in the game's database alongside your other settings and survive restarts. If the ruleset is removed, its settings are no longer active; database rows may remain and be reused if the ruleset is installed again.
+
+## Manual performance capture
+
+The **Custom frame limiter** settings include manual FPS capture controls. Start collecting before a play and stop after gameplay to review the update/render 1% lows, minimums, and suggested limits (5% below each 1% low). **Apply suggested limits** enables the update-side limiter, switches both limiters to Custom, and sets the suggested update and draw caps; input and audio remain unchanged.
+
+The **Start/end buffer** setting trims that many seconds from both ends of each capture when it is stopped, helping exclude loading and post-play screens. Captures with too little data after trimming do not add samples. Retained readings combine across captures and hold at most the latest five minutes of valid samples; they remain in memory for the current settings-section lifetime. Stop collection to review readings, then use **Clear collected data** to reset them before the next capture. Clearing is disabled while collection is running.
+
+This is a lightweight estimate, not a controlled hardware-capacity benchmark. Existing caps, Frame Sync, client activity, and capture timing can affect the results. Review suggestions before applying them.
 
 ## ⚠️ Warnings
 
@@ -59,24 +68,23 @@ Issues that only occur with this ruleset installed will be closed on the officia
 
 ### Don't play with 0 (unlimited)
 
-An **active custom limit** set to `0` means that thread runs **completely uncapped**. A saved zero in a hidden Custom slider or an inactive limiter does not apply. Running uncapped can stutter, spike frametimes, and use excess power for no gameplay benefit.
+An **active custom limit** set to `0` means that thread runs **completely uncapped**. A saved zero in a hidden Custom slider or an inactive limiter does not apply. Running uncapped can stutter, spike frametimes, and use excess power for no gameplay benefit. Session suggestions never uncap threads.
 
-The intended workflow:
+For a performance capture:
 
-1. Enable the relevant limiter, choose **Custom**, and set only the thread(s) you're testing to `0`.
-2. Play a demanding map briefly.
-3. Watch your frame times and find your **1% lows** (the framerate you dip *to*, not the average).
-4. Set your custom limits **slightly above** those 1% low values.
-5. Play like that daily. That's the whole point of the tool.
+1. Open **Custom frame limiter** once after launch.
+2. Set the start/end buffer to exclude loading and post-play time.
+3. Select **Start collecting**, play a map, then return and select **Stop and review**.
+4. Review the update/render 1% lows and suggested caps. Use **Clear collected data** before a fresh capture if you want to discard earlier readings.
 
 ## Roadmap
 
-Ordered by priority (startup → presets → Frame Sync → benchmark):
+Ordered by priority (startup → presets → Frame Sync → session suggestions):
 
 - **Startup application** — *investigated.* A ruleset alone can't apply limits at cold boot: the only ruleset code that runs at launch (`CreateInstance`/`CreateConfig`) is handed no host, and osu gives rulesets no startup hook on purpose. Limits persist and re-apply whenever the settings panel opens. The planned ruleset-only way to skip opening settings is an optional **apply-on-play** path (engage limits the moment you start a map, via the ruleset's drawables).
 - **Preset tiers** — *done.* A **Preset** dropdown (1k / 2× / 4× / 8× / Custom) drives update, input and audio together; the custom sliders only appear for **Custom** and retain their values when presets change.
 - **Frame Sync integration** — *reworked.* The update-side limiter has its own on/off toggle and re-asserts when Frame Sync changes. Rendering can follow the official Frame Sync modes and refresh-rate multipliers, or use a separate custom draw-thread limit.
-- **Benchmark mode** — measure your own 1% lows in-game and suggest limits automatically.
+- **Session suggestions** — *implemented.* Recent session-wide update/render FPS samples provide optional custom limits without temporarily uncapping threads.
 
 ## Compatibility & credits
 
