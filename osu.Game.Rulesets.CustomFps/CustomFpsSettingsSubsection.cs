@@ -11,7 +11,10 @@ using osu.Framework.Graphics;
 using osu.Framework.Graphics.Containers;
 using osu.Framework.Platform;
 using osu.Framework.Threading;
+using osu.Game.Graphics;
+using osu.Game.Graphics.Sprites;
 using osu.Game.Graphics.UserInterfaceV2;
+using osu.Game.Overlays;
 using osu.Game.Overlays.Settings;
 using osu.Game.Rulesets.CustomFps.Configuration;
 using osuTK;
@@ -51,6 +54,8 @@ namespace osu.Game.Rulesets.CustomFps
 
         private FillFlowContainer customDrawSliderContainer = null!;
 
+        private FillFlowContainer sessionMetricsContainer = null!;
+
         private Bindable<bool> enabledBindable = null!;
 
         private Bindable<CustomFpsPreset> presetBindable = null!;
@@ -80,6 +85,8 @@ namespace osu.Game.Rulesets.CustomFps
         private SettingsButtonV2 applySuggestedLimitsButton = null!;
 
         private SettingsButtonV2 collectionButton = null!;
+
+        private SettingsButtonV2 sessionMetricsToggleButton = null!;
 
         private SettingsButtonV2 clearDataButton = null!;
 
@@ -143,54 +150,24 @@ namespace osu.Game.Rulesets.CustomFps
 
             Children = new Drawable[]
             {
-                sessionMetricsNote = new SettingsNote
-                {
-                    RelativeSizeAxes = Axes.X,
-                    Current =
-                    {
-                        Value = new SettingsNote.Data("MANUAL PERFORMANCE CAPTURE", SettingsNote.Type.Informational),
-                    },
-                },
                 new SettingsNote
                 {
                     RelativeSizeAxes = Axes.X,
                     Current =
                     {
-                        Value = new SettingsNote.Data("Start collection before a play, then stop it after gameplay. A configurable buffer is trimmed from both ends so loading and post-play screens can be excluded.", SettingsNote.Type.Informational),
+                        Value = new SettingsNote.Data("Reporting an issue? First reproduce it with this ruleset removed — only reports that also occur on official lazer without it will be looked at upstream.", SettingsNote.Type.Warning),
                     },
                 },
-                collectionButton = new SettingsButtonV2
+                unlimitedWarningNote = new SettingsNote
                 {
-                    Text = "Start collecting",
-                    Keywords = new[] { "start", "stop", "collect", "capture", "performance", "fps" },
-                    Action = toggleCollection,
+                    RelativeSizeAxes = Axes.X,
                 },
-                clearDataButton = new SettingsButtonV2
+                new OsuSpriteText
                 {
-                    Text = "Clear collected data",
-                    Keywords = new[] { "clear", "reset", "delete", "performance", "fps" },
-                    Action = clearCollectedData,
-                    Enabled = { Value = false },
-                },
-                new SettingsItemV2(new FormSliderBar<double>
-                {
-                    Caption = "Start/end buffer",
-                    HintText = "This many seconds are excluded from both the beginning and end when you stop a capture.",
-                    KeyboardStep = 1,
-                    TooltipFormat = v => $"{v:0} seconds",
-                    TransferValueOnCommit = true,
-                    Current = { BindTarget = captureBufferSeconds },
-                })
-                {
-                    Keywords = new[] { "buffer", "seconds", "trim", "capture", "loading", "results" },
-                },
-                applySuggestedLimitsButton = new SettingsButtonV2
-                {
-                    Text = "Apply suggested limits",
-                    TooltipText = "Uses 5% below the 1% lows from the manually collected samples.",
-                    Keywords = new[] { "suggested", "recommended", "capture", "fps", "limits" },
-                    Action = applySuggestedLimits,
-                    Enabled = { Value = false },
+                    Text = "UPDATE / INPUT / AUDIO",
+                    Font = OsuFont.GetFont(size: 20),
+                    Margin = new MarginPadding { Vertical = SettingsSubsection.VERTICAL_PADDING, Horizontal = 5 },
+                    Padding = SettingsPanel.CONTENT_PADDING,
                 },
                 new SettingsItemV2(new FormCheckBox
                 {
@@ -250,6 +227,13 @@ namespace osu.Game.Rulesets.CustomFps
                         },
                     },
                 },
+                new OsuSpriteText
+                {
+                    Text = "RENDERING",
+                    Font = OsuFont.GetFont(size: 20),
+                    Margin = new MarginPadding { Vertical = SettingsSubsection.VERTICAL_PADDING, Horizontal = 5 },
+                    Padding = SettingsPanel.CONTENT_PADDING,
+                },
                 new SettingsEnumDropdown<CustomFpsRenderMode>
                 {
                     LabelText = "Render thread limit",
@@ -271,17 +255,71 @@ namespace osu.Game.Rulesets.CustomFps
                         },
                     },
                 },
-                unlimitedWarningNote = new SettingsNote
+                sessionMetricsToggleButton = new SettingsButtonV2
                 {
-                    RelativeSizeAxes = Axes.X,
+                    Text = "Show performance capture",
+                    Keywords = new[] { "performance", "measurement", "benchmark", "capture", "fps" },
+                    Action = toggleSessionMetrics,
                 },
-                new SettingsNote
+                sessionMetricsContainer = new FillFlowContainer
                 {
                     RelativeSizeAxes = Axes.X,
-                    Current =
+                    Height = 0,
+                    Direction = FillDirection.Vertical,
+                    Spacing = new Vector2(0, 5),
+                    Masking = true,
+                    Children = new Drawable[]
                     {
-                        Value = new SettingsNote.Data("Reporting an issue? First reproduce it with this ruleset removed — only reports that also occur on official lazer without it will be looked at upstream.", SettingsNote.Type.Warning),
-                    },
+                        sessionMetricsNote = new SettingsNote
+                        {
+                            RelativeSizeAxes = Axes.X,
+                            Current =
+                            {
+                                Value = new SettingsNote.Data("MANUAL PERFORMANCE CAPTURE", SettingsNote.Type.Informational),
+                            },
+                        },
+                        new SettingsNote
+                        {
+                            RelativeSizeAxes = Axes.X,
+                            Current =
+                            {
+                                Value = new SettingsNote.Data("Start collection before a play, then stop it after gameplay. A configurable buffer is trimmed from both ends so loading and post-play screens can be excluded.", SettingsNote.Type.Informational),
+                            },
+                        },
+                        collectionButton = new SettingsButtonV2
+                        {
+                            Text = "Start collecting",
+                            Keywords = new[] { "start", "stop", "collect", "capture", "performance", "fps" },
+                            Action = toggleCollection,
+                        },
+                        clearDataButton = new SettingsButtonV2
+                        {
+                            Text = "Clear collected data",
+                            Keywords = new[] { "clear", "reset", "delete", "performance", "fps" },
+                            Action = clearCollectedData,
+                            Enabled = { Value = false },
+                        },
+                        new SettingsItemV2(new FormSliderBar<double>
+                        {
+                            Caption = "Start/end buffer",
+                            HintText = "This many seconds are excluded from both the beginning and end when you stop a capture.",
+                            KeyboardStep = 1,
+                            TooltipFormat = v => $"{v:0} seconds",
+                            TransferValueOnCommit = true,
+                            Current = { BindTarget = captureBufferSeconds },
+                        })
+                        {
+                            Keywords = new[] { "buffer", "seconds", "trim", "capture", "loading", "results" },
+                        },
+                        applySuggestedLimitsButton = new SettingsButtonV2
+                        {
+                            Text = "Apply suggested limits",
+                            TooltipText = "Uses 5% below the 1% lows from the manually collected samples.",
+                            Keywords = new[] { "suggested", "recommended", "capture", "fps", "limits" },
+                            Action = applySuggestedLimits,
+                            Enabled = { Value = false },
+                        },
+                    }
                 },
             };
 
@@ -334,6 +372,23 @@ namespace osu.Game.Rulesets.CustomFps
                 stopCollection();
             else
                 startCollection();
+        }
+
+        private void toggleSessionMetrics()
+        {
+            bool expand = (sessionMetricsContainer.AutoSizeAxes & Axes.Y) == 0;
+
+            if (expand)
+            {
+                sessionMetricsContainer.AutoSizeAxes |= Axes.Y;
+                sessionMetricsToggleButton.Text = "Hide performance capture";
+            }
+            else
+            {
+                sessionMetricsContainer.AutoSizeAxes &= ~Axes.Y;
+                sessionMetricsContainer.Height = 0;
+                sessionMetricsToggleButton.Text = "Show performance capture";
+            }
         }
 
         private void startCollection()

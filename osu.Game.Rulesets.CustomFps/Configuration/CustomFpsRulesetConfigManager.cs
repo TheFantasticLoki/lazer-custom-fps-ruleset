@@ -32,14 +32,14 @@ namespace osu.Game.Rulesets.CustomFps.Configuration
         protected override void InitialiseDefaults()
         {
             SetDefault(CustomFpsRulesetSetting.Enabled, false);
-            SetDefault(CustomFpsRulesetSetting.PresetMode, CustomFpsPreset.Custom);
+            SetDefault(CustomFpsRulesetSetting.PresetMode, CustomFpsPreset.Tier1k);
 
             SetDefault(CustomFpsRulesetSetting.InputThreadLimit, 1000.0, 0.0, 8000.0, 1.0);
             SetDefault(CustomFpsRulesetSetting.AudioThreadLimit, 1000.0, 0.0, 8000.0, 1.0);
             SetDefault(CustomFpsRulesetSetting.UpdateThreadLimit, 1000.0, 0.0, 8000.0, 1.0);
             SetDefault(CustomFpsRulesetSetting.DrawThreadLimit, 1000.0, 0.0, 8000.0, 1.0);
             SetDefault(CustomFpsRulesetSetting.RenderMode, CustomFpsRenderMode.UseFrameSync);
-            SetDefault(CustomFpsRulesetSetting.CaptureBufferSeconds, 5.0, 0.0, 30.0, 1.0);
+            SetDefault(CustomFpsRulesetSetting.CaptureBufferSeconds, 10.0, 0.0, 30.0, 1.0);
             SetDefault(CustomFpsRulesetSetting.SyncInputAudioWithUpdate, false);
         }
     }
